@@ -878,6 +878,35 @@ export default function App() {
     }
   };
 
+  // Terapkan identitas dan metadata website dari Settings.
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+
+    const title = String(
+      data.settings.metaTitle ||
+      data.settings.siteName ||
+      'NGULEMIN'
+    ).trim();
+
+    const description = String(data.settings.metaDescription || '').trim();
+
+    document.title = title;
+
+    if (description) {
+      let meta = document.querySelector('meta[name="description"]') as HTMLMetaElement | null;
+      if (!meta) {
+        meta = document.createElement('meta');
+        meta.name = 'description';
+        document.head.appendChild(meta);
+      }
+      meta.content = description;
+    }
+  }, [
+    data.settings.metaTitle,
+    data.settings.metaDescription,
+    data.settings.siteName
+  ]);
+
   // Tampilkan cache lokal segera, lalu sinkronkan data publik di background.
   useEffect(() => {
     void refreshAllData(false);
@@ -1404,17 +1433,64 @@ export default function App() {
       });
   };
 
-  const saveHowToOrder = () => {
-    const rows = data.howToOrder.map(
-      (step: any, index: number) => ({
-        Nomor: step.num || String(index + 1).padStart(2, '0'),
-        Judul: step.title,
-        Deskripsi: step.desc,
-        Icon: step.icon || 'FileText',
-        Status: step.status || 'Aktif',
-        Urutan: index + 1
-      })
+  const renumberHowToOrder = (items: any[]) => {
+    return items.map((step: any, index: number) => ({
+      ...step,
+      num: String(index + 1).padStart(2, '0')
+    }));
+  };
+
+  const addHowToOrderStep = () => {
+    const updated = renumberHowToOrder([
+      ...data.howToOrder,
+      { num: '', title: '', desc: '', icon: 'FileText', status: 'Aktif' }
+    ]);
+
+    setData((prev: typeof INITIAL_DATA) => ({
+      ...prev,
+      howToOrder: updated
+    }));
+
+    triggerToast('Langkah baru ditambahkan. Nomor otomatis disesuaikan.');
+  };
+
+  const deleteHowToOrderStep = (indexToDelete: number) => {
+    const step = data.howToOrder[indexToDelete];
+
+    openDeleteConfirm(
+      'Hapus Langkah Cara Pesan',
+      `Hapus langkah "${step?.title || `Nomor ${indexToDelete + 1}`}"? Nomor langkah setelahnya akan otomatis disesuaikan.`,
+      () => {
+        const updated = renumberHowToOrder(
+          data.howToOrder.filter((_item: any, index: number) => index !== indexToDelete)
+        );
+
+        setData((prev: typeof INITIAL_DATA) => ({
+          ...prev,
+          howToOrder: updated
+        }));
+
+        triggerToast('Langkah dihapus. Nomor urut otomatis disesuaikan.');
+      }
     );
+  };
+
+  const saveHowToOrder = () => {
+    const normalizedSteps = renumberHowToOrder(data.howToOrder);
+
+    setData((prev: typeof INITIAL_DATA) => ({
+      ...prev,
+      howToOrder: normalizedSteps
+    }));
+
+    const rows = normalizedSteps.map((step: any, index: number) => ({
+      Nomor: String(index + 1).padStart(2, '0'),
+      Judul: step.title,
+      Deskripsi: step.desc,
+      Icon: step.icon || 'FileText',
+      Status: step.status || 'Aktif',
+      Urutan: index + 1
+    }));
 
     triggerToast('Cara Pesan diperbarui...');
 
@@ -1438,6 +1514,36 @@ export default function App() {
       .catch((error: any) => {
         void refreshAllData(false);
         triggerToast(error.message || 'Gagal menyimpan Home.');
+      });
+  };
+
+  const saveBrandIdentity = () => {
+    const brandSettings = {
+      logoUrl: String(data.settings.logoUrl || '').trim(),
+      siteName: String(data.settings.siteName || '').trim(),
+      tagline: String(data.settings.tagline || '').trim()
+    };
+
+    if (!brandSettings.siteName) {
+      triggerToast('Nama Brand / Website tidak boleh kosong.');
+      return;
+    }
+
+    triggerToast('Menyimpan identitas navbar...');
+
+    void callApi('updateSettings', { data: brandSettings })
+      .then(() => {
+        setData((prev: typeof INITIAL_DATA) => ({
+          ...prev,
+          settings: {
+            ...prev.settings,
+            ...brandSettings
+          }
+        }));
+        triggerToast('Logo, nama brand, dan tagline berhasil disimpan.');
+      })
+      .catch((error: any) => {
+        triggerToast(error.message || 'Gagal menyimpan identitas navbar.');
       });
   };
 
@@ -2716,7 +2822,7 @@ Catatan: ${orderForm.catatan || '-'}`;
               <div className="pt-4 border-t border-[#38332E] space-y-2">
                 <button
                   type="button"
-                  onClick={() => {window.location.href = 'https://nguleminofficial.vercel.app/panduan.html';}}
+                  onClick={() => setCurrentView('guide')}
                   className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs text-[#D4AF37] hover:bg-white/5 cursor-pointer"
                 >
                   <FileText className="w-4 h-4" />
@@ -2818,7 +2924,7 @@ Catatan: ${orderForm.catatan || '-'}`;
                       Lihat Pesanan Masuk ({data.orders.length})
                     </button>
                     <button
-                      onClick={() => {window.location.href = 'https://nguleminofficial.vercel.app/panduan.html';}}
+                      onClick={() => setCurrentView('guide')}
                       className="px-4 py-2 text-xs font-semibold text-[#8C6D46] border border-[#8C6D46] rounded-lg"
                     >
                       Buka Panduan Code.gs
@@ -3125,13 +3231,12 @@ Catatan: ${orderForm.catatan || '-'}`;
                   {/* Tabel Katalog Tema */}
                   <div className="border border-[#E8E1D9] rounded-xl overflow-hidden bg-white shadow-2xs">
                     <div className="overflow-x-auto">
-                      <table className="w-full text-left border-collapse min-w-[720px]">
+                      <table className="w-full text-left border-collapse min-w-[620px]">
                         <thead>
                           <tr className="bg-[#FAF8F5] border-b border-[#E8E1D9] text-[11px] font-bold text-[#766E65] uppercase tracking-wider">
                             <th className="py-3 px-4 w-24">Preview</th>
                             <th className="py-3 px-4">Nama & Deskripsi Tema</th>
                             <th className="py-3 px-4 w-40">Kategori</th>
-                            <th className="py-3 px-4 w-32">Harga</th>
                             <th className="py-3 px-4 w-28 text-center">Status</th>
                             <th className="py-3 px-4 w-36 text-center">Aksi</th>
                           </tr>
@@ -3191,13 +3296,6 @@ Catatan: ${orderForm.catatan || '-'}`;
                               <td className="py-3 px-4 align-middle">
                                 <span className="inline-block bg-[#8C6D46]/10 text-[#8C6D46] font-semibold text-[11px] px-2.5 py-1 rounded-full border border-[#8C6D46]/20">
                                   {t.Category || "Umum"}
-                                </span>
-                              </td>
-
-                              {/* Harga */}
-                              <td className="py-3 px-4 align-middle">
-                                <span className="font-mono font-bold text-xs text-[#8C6D46]">
-                                  {formatRupiah(t.Harga)}
                                 </span>
                               </td>
 
@@ -3537,21 +3635,38 @@ Catatan: ${orderForm.catatan || '-'}`;
             {/* HOW TO ORDER */}
             {dashTab === 'howto' && (
               <div className="bg-white p-6 rounded-2xl border border-[#E8E1D9] shadow-sm space-y-6">
-                <div className="flex items-center justify-between border-b border-[#E8E1D9] pb-4">
-                  <h2 className="text-xl font-serif-luxury font-bold text-[#2D2723]">Kelola Langkah Cara Pesan</h2>
-                  <button
-                    onClick={() => {void saveHowToOrder();}}
-                    className="px-4 py-2 text-xs font-semibold text-white bg-[#8C6D46] hover:bg-[#735735] rounded-lg shadow-sm"
-                  >
-                    Simpan Perubahan
-                  </button>
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-[#E8E1D9] pb-4">
+                  <div>
+                    <h2 className="text-xl font-serif-luxury font-bold text-[#2D2723]">Kelola Langkah Cara Pesan</h2>
+                    <p className="text-xs text-[#766E65] mt-1">
+                      Nomor otomatis dimulai dari 01 di bagian paling atas. Menghapus langkah akan menyesuaikan nomor berikutnya.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={addHowToOrderStep}
+                      className="px-4 py-2 text-xs font-semibold text-[#8C6D46] border border-[#8C6D46] hover:bg-[#8C6D46]/10 rounded-lg shadow-sm flex items-center gap-1.5"
+                    >
+                      <Plus className="w-4 h-4" /> Tambah Langkah
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { void saveHowToOrder(); }}
+                      className="px-4 py-2 text-xs font-semibold text-white bg-[#8C6D46] hover:bg-[#735735] rounded-lg shadow-sm"
+                    >
+                      Simpan Perubahan
+                    </button>
+                  </div>
                 </div>
+
                 <div className="space-y-4">
                   {data.howToOrder.map((step: any, idx: number) => (
-                    <div key={idx} className="p-4 border border-[#E8E1D9] rounded-xl flex flex-col sm:flex-row items-start sm:items-center gap-4 bg-[#FAF8F5]/40">
+                    <div key={`${idx}-${step.num}`} className="p-4 border border-[#E8E1D9] rounded-xl flex flex-col sm:flex-row items-start sm:items-center gap-4 bg-[#FAF8F5]/40">
                       <div className="w-10 h-10 rounded-full bg-[#8C6D46]/10 text-[#8C6D46] font-bold text-base flex items-center justify-center shrink-0">
-                        {step.num}
+                        {String(idx + 1).padStart(2, '0')}
                       </div>
+
                       <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-3 w-full text-xs">
                         <div>
                           <label className="block font-semibold text-[#2D2723] mb-1">Judul Langkah</label>
@@ -3566,6 +3681,7 @@ Catatan: ${orderForm.catatan || '-'}`;
                             className="w-full p-2 bg-white border border-[#E8E1D9] rounded-lg focus:outline-none focus:border-[#8C6D46]"
                           />
                         </div>
+
                         <div>
                           <label className="block font-semibold text-[#2D2723] mb-1">Deskripsi Langkah</label>
                           <input
@@ -3580,8 +3696,24 @@ Catatan: ${orderForm.catatan || '-'}`;
                           />
                         </div>
                       </div>
+
+                      <button
+                        type="button"
+                        onClick={() => deleteHowToOrderStep(idx)}
+                        className="self-end sm:self-center p-2 text-red-500 hover:text-red-700 hover:bg-red-50 rounded-lg border border-red-200 transition-colors shrink-0"
+                        title={`Hapus langkah ${String(idx + 1).padStart(2, '0')}`}
+                        aria-label={`Hapus langkah ${String(idx + 1).padStart(2, '0')}`}
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
                     </div>
                   ))}
+
+                  {data.howToOrder.length === 0 && (
+                    <div className="py-10 text-center text-xs text-[#766E65] border border-dashed border-[#E8E1D9] rounded-xl">
+                      Belum ada langkah. Klik "Tambah Langkah" untuk membuat langkah pertama.
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -3821,13 +3953,28 @@ Catatan: ${orderForm.catatan || '-'}`;
                 {/* 2. Logo Website & Brand Identity */}
                 <div className="bg-white p-6 rounded-2xl border border-[#E8E1D9] shadow-sm space-y-4">
                   <div className="border-b border-[#E8E1D9] pb-4">
-                    <h2 className="text-xl font-serif-luxury font-bold text-[#2D2723] flex items-center gap-2">
-                      <ImageIcon className="w-5 h-5 text-[#8C6D46]" /> Logo Website & Identitas Navbar
-                    </h2>
-                    <p className="text-xs text-[#766E65] mt-1">
-                      Ubah logo NGULEMIN di navbar menggunakan link file gambar (.jpg, .png, .svg). Saat logo diklik, pengunjung akan diarahkan ke Home.
-                    </p>
+                    <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+                      <div>
+                        <h2 className="text-xl font-serif-luxury font-bold text-[#2D2723] flex items-center gap-2">
+                          <ImageIcon className="w-5 h-5 text-[#8C6D46]" /> Logo Website & Identitas Navbar
+                        </h2>
+                        <p className="text-xs text-[#766E65] mt-1">
+                          Ubah logo, nama brand, dan tagline yang digunakan pada navbar dan halaman utama website.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => { void saveBrandIdentity(); }}
+                        className="px-4 py-2 text-xs font-semibold text-white bg-[#8C6D46] hover:bg-[#735735] rounded-lg shadow-sm whitespace-nowrap"
+                      >
+                        Simpan Pengaturan
+                      </button>
+                    </div>
                   </div>
+
+                  <p className="text-[11px] text-emerald-700 bg-emerald-50 border border-emerald-100 rounded-lg px-3 py-2">
+                    Setelah disimpan, logo, nama brand, dan tagline akan digunakan pada halaman utama website.
+                  </p>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
                     <div className="sm:col-span-2">
@@ -4437,17 +4584,7 @@ Catatan: ${orderForm.catatan || '-'}`;
                   />
                 </div>
 
-                <div>
-                  <label className="block font-semibold text-[#2D2723] mb-1">Harga (Rp) *</label>
-                  <input
-                    type="number"
-                    required
-                    min={0}
-                    value={themeModal.data.Harga}
-                    onChange={(e) => setThemeModal({ ...themeModal, data: { ...themeModal.data, Harga: Number(e.target.value) } })}
-                    className="w-full p-2.5 bg-[#FAF8F5] border border-[#E8E1D9] rounded-lg focus:outline-none focus:border-[#8C6D46]"
-                  />
-                </div>
+
 
                 <div>
                   <label className="block font-semibold text-[#2D2723] mb-1">Status</label>
@@ -4718,26 +4855,17 @@ Catatan: ${orderForm.catatan || '-'}`;
       {/* 4. MODAL TESTIMONI */}
       {testiModal.open && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fadeIn">
-          <div className="bg-white rounded-2xl w-full max-w-md border border-[#E8E1D9] shadow-2xl flex flex-col">
-            <div className="p-5 border-b border-[#E8E1D9] flex items-center justify-between">
+          <div className="bg-white rounded-2xl w-full max-w-md max-h-[90vh] overflow-y-auto border border-[#E8E1D9] shadow-2xl flex flex-col">
+            <div className="p-5 border-b border-[#E8E1D9] flex items-center justify-between sticky top-0 bg-white z-10">
               <h3 className="text-lg font-serif-luxury font-bold text-[#2D2723]">
                 {testiModal.isEdit ? "Edit Testimoni" : "Tambah Testimoni Baru"}
               </h3>
-              <button
-                onClick={() => setTestiModal(prev => ({ ...prev, open: false }))}
-                className="p-1 text-[#766E65] hover:text-[#2D2723]"
-              >
+              <button type="button" onClick={() => setTestiModal(prev => ({ ...prev, open: false }))} className="p-1 text-[#766E65] hover:text-[#2D2723]" aria-label="Tutup">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                void saveTestimonial();
-              }}
-              className="p-5 space-y-3.5 text-xs"
-            >
+            <form onSubmit={(e) => { e.preventDefault(); void saveTestimonial(); }} className="p-5 space-y-4 text-xs">
               <div>
                 <label className="block font-semibold text-[#2D2723] mb-1">Nama Pasangan / Klien *</label>
                 <input
@@ -4748,6 +4876,54 @@ Catatan: ${orderForm.catatan || '-'}`;
                   placeholder="Contoh: Dimas & Sarah"
                   className="w-full p-2.5 bg-[#FAF8F5] border border-[#E8E1D9] rounded-lg focus:outline-none focus:border-[#8C6D46]"
                 />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-[#2D2723] mb-1">Gambar Testimoni</label>
+                <input
+                  type="url"
+                  value={testiModal.data.photo}
+                  onChange={(e) => setTestiModal({ ...testiModal, data: { ...testiModal.data, photo: e.target.value } })}
+                  placeholder="https://images.unsplash.com/..."
+                  className="w-full p-2.5 bg-[#FAF8F5] border border-[#E8E1D9] rounded-lg focus:outline-none focus:border-[#8C6D46]"
+                />
+                <div className="mt-2 flex items-center gap-3">
+                  <div className="w-14 h-14 rounded-full overflow-hidden border border-[#E8E1D9] bg-[#FAF8F5] shrink-0">
+                    {testiModal.data.photo ? (
+                      <img
+                        src={testiModal.data.photo}
+                        alt="Preview foto testimoni"
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center text-[10px] text-[#A9A198]">Foto</div>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-[#766E65]">Masukkan URL gambar. Preview akan tampil sebelum disimpan.</p>
+                </div>
+              </div>
+
+              <div className="pt-1">
+                <label className="block font-semibold text-[#2D2723] mb-1">Rating Bintang</label>
+                <div className="flex flex-wrap items-center gap-1.5" role="radiogroup" aria-label="Rating testimoni">
+                  {[1, 2, 3, 4, 5].map((star) => (
+                    <button
+                      key={star}
+                      type="button"
+                      onClick={() => setTestiModal({ ...testiModal, data: { ...testiModal.data, rating: star } })}
+                      className={`w-9 h-9 rounded-lg border text-lg transition-colors ${
+                        star <= testiModal.data.rating
+                          ? 'bg-amber-50 border-amber-300 text-amber-500'
+                          : 'bg-[#FAF8F5] border-[#E8E1D9] text-[#C9C1B8] hover:text-amber-400'
+                      }`}
+                      aria-label={`${star} bintang`}
+                      aria-pressed={star === testiModal.data.rating}
+                    >
+                      ★
+                    </button>
+                  ))}
+                  <span className="ml-1 text-xs font-semibold text-[#766E65]">{testiModal.data.rating}/5</span>
+                </div>
               </div>
 
               <div>
@@ -4764,7 +4940,7 @@ Catatan: ${orderForm.catatan || '-'}`;
               <div>
                 <label className="block font-semibold text-[#2D2723] mb-1">Isi Ulasan Testimoni *</label>
                 <textarea
-                  rows={3}
+                  rows={4}
                   required
                   value={testiModal.data.testi}
                   onChange={(e) => setTestiModal({ ...testiModal, data: { ...testiModal.data, testi: e.target.value } })}
@@ -4774,17 +4950,10 @@ Catatan: ${orderForm.catatan || '-'}`;
               </div>
 
               <div className="pt-3 border-t border-[#E8E1D9] flex items-center justify-end gap-3">
-                <button
-                  type="button"
-                  onClick={() => setTestiModal(prev => ({ ...prev, open: false }))}
-                  className="px-4 py-2 text-xs font-semibold text-[#766E65] hover:text-[#2D2723]"
-                >
+                <button type="button" onClick={() => setTestiModal(prev => ({ ...prev, open: false }))} className="px-4 py-2 text-xs font-semibold text-[#766E65] hover:text-[#2D2723]">
                   Batal
                 </button>
-                <button
-                  type="submit"
-                  className="px-5 py-2 text-xs font-semibold text-white bg-[#8C6D46] hover:bg-[#735735] rounded-xl shadow-sm"
-                >
+                <button type="submit" className="px-5 py-2 text-xs font-semibold text-white bg-[#8C6D46] hover:bg-[#735735] rounded-xl shadow-sm">
                   {testiModal.isEdit ? "Simpan" : "Tambah"}
                 </button>
               </div>
