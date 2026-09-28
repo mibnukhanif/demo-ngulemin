@@ -73,6 +73,8 @@ const INITIAL_DATA = {
       ((window as any).CONFIG?.API_URL as string) ||
       ""
   },
+  // Fallback kategori untuk database lama. Setelah pengelolaan kategori dilakukan,
+  // daftar permanen disimpan di Settings.themeCategories.
   categories: [
     "Floral & Romantic",
     "Adat & Traditional",
@@ -351,6 +353,37 @@ const cleanApiUrlValue = (value: any) => {
   return markdownMatch ? markdownMatch[1] : text;
 };
 
+// Kategori tema disimpan permanen di Settings sebagai JSON.
+// Jika setting ini belum ada pada database lama, kita fallback ke kategori yang
+// berasal dari data lama/theme agar instalasi lama tetap kompatibel.
+const parsePersistedCategories = (value: any): string[] | null => {
+  if (Array.isArray(value)) {
+    return value
+      .map((item: any) => String(item).trim())
+      .filter(Boolean);
+  }
+
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const text = value.trim();
+  if (!text) return null;
+
+  try {
+    const parsed = JSON.parse(text);
+    if (Array.isArray(parsed)) {
+      return parsed
+        .map((item: any) => String(item).trim())
+        .filter(Boolean);
+    }
+  } catch {
+    // Bukan JSON valid; biarkan fallback bekerja.
+  }
+
+  return null;
+};
+
 const normalizeApiData = (apiData: any, currentData: any) => {
   const currentThemes = currentData.themes || [];
   const currentTestimonials = currentData.testimonials || [];
@@ -456,18 +489,29 @@ const normalizeApiData = (apiData: any, currentData: any) => {
         })
       : currentData.themes,
 
-    categories: Array.from(
-      new Set([
-        ...(currentData.categories || []),
-        ...(Array.isArray(apiData.themes)
-          ? apiData.themes
-              .map((theme: any) => theme.Category)
-              .filter((category: any) =>
-                typeof category === "string" && category.trim() !== ""
-              )
-          : [])
-      ])
-    ),
+    categories: (() => {
+      const persistedCategories = parsePersistedCategories(
+        apiData.settings?.themeCategories ??
+        currentData.settings?.themeCategories
+      );
+
+      if (persistedCategories !== null) {
+        return persistedCategories;
+      }
+
+      return Array.from(
+        new Set([
+          ...(currentData.categories || []),
+          ...(Array.isArray(apiData.themes)
+            ? apiData.themes
+                .map((theme: any) => theme.Category)
+                .filter((category: any) =>
+                  typeof category === "string" && category.trim() !== ""
+                )
+            : [])
+        ])
+      );
+    })(),
 
     pricing: Array.isArray(apiData.pricing)
       ? apiData.pricing.map((pkg: any) => ({
@@ -571,6 +615,12 @@ export default function App() {
     }
     return { ...INITIAL_DATA };
   });
+
+  // Katalog publik tidak dirender dari cache/default sebelum sinkronisasi server pertama selesai.
+  // Ini mencegah tema bawaan/tema lama tampil sesaat lalu terganti tema hasil CMS.
+  const [publicDataReady, setPublicDataReady] = useState<boolean>(
+    () => !getConfiguredApiUrl()
+  );
 
   const lastServerDataRef = useRef<any>(data);
   const persistTimerRef = useRef<number | null>(null);
@@ -845,9 +895,11 @@ export default function App() {
 
       lastServerDataRef.current = normalized;
       setData(normalized);
+      setPublicDataReady(true);
       return true;
     } catch (error: any) {
       console.warn('Background data refresh failed:', error);
+      setPublicDataReady(true);
       if (showError) {
         triggerToast(
           error.message || 'Gagal menyegarkan data dari Spreadsheet.'
@@ -923,7 +975,7 @@ export default function App() {
     data.settings.siteName
   ]);
 
-  // Tampilkan cache lokal segera, lalu sinkronkan data publik di background.
+  // Sinkronkan data publik di background. Katalog tema menunggu sinkronisasi pertama agar tidak menampilkan data lama/default.
   useEffect(() => {
     void refreshAllData(false);
   }, []);
@@ -2352,6 +2404,18 @@ Catatan: ${orderForm.catatan || '-'}`;
                 </p>
               </div>
 
+              {!publicDataReady ? (
+                <div className="max-w-4xl mx-auto py-12 px-4 bg-white rounded-2xl border border-[#E8E1D9]">
+                  <div className="flex flex-col items-center justify-center text-center">
+                    <RefreshCw className="w-8 h-8 text-[#8C6D46] animate-spin mb-4" />
+                    <h4 className="text-base font-bold text-[#2D2723]">Memuat tema undangan...</h4>
+                    <p className="text-xs text-[#766E65] mt-1">
+                      Mengambil katalog terbaru dari dashboard CMS.
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <>
               {/* Category Filter Menu Buttons */}
               <div className="w-full max-w-4xl mx-auto mb-10 px-2 sm:px-0">
                 <div className="flex items-center justify-start sm:justify-center gap-2 sm:gap-2.5 overflow-x-auto pb-2.5 sm:pb-0 px-1 sm:px-0 sm:flex-wrap no-scrollbar">
@@ -2474,6 +2538,8 @@ Catatan: ${orderForm.catatan || '-'}`;
                   </div>
                 );
               })()}
+                </>
+              )}
 
             </div>
           </section>
@@ -3319,9 +3385,34 @@ Catatan: ${orderForm.catatan || '-'}`;
                         return;
                       }
                       const updated = [...existing, trimmed];
-                      setData((prev: typeof INITIAL_DATA) => ({ ...prev, categories: updated }));
+
+                      // Simpan daftar kategori secara permanen di Settings.
+                      setData((prev: typeof INITIAL_DATA) => ({
+                        ...prev,
+                        categories: updated,
+                        settings: {
+                          ...prev.settings,
+                          themeCategories: JSON.stringify(updated)
+                        }
+                      }));
                       setNewCategoryInput('');
-                      triggerToast(`Kategori "${trimmed}" berhasil ditambahkan!`);
+
+                      triggerToast(`Kategori "${trimmed}" ditambahkan. Menyimpan...`);
+
+                      void callApi('updateSettings', {
+                        data: {
+                          themeCategories: JSON.stringify(updated)
+                        }
+                      })
+                        .then(() => {
+                          triggerToast(`Kategori "${trimmed}" berhasil disimpan.`);
+                        })
+                        .catch((error: any) => {
+                          void refreshAllData(false);
+                          triggerToast(
+                            error.message || 'Gagal menyimpan kategori ke Spreadsheet.'
+                          );
+                        });
                     }}
                     className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 pt-1"
                   >
@@ -3363,11 +3454,40 @@ Catatan: ${orderForm.catatan || '-'}`;
                               type="button"
                               onClick={() => {
                                 openDeleteConfirm("Hapus Kategori", `Apakah Anda yakin ingin menghapus kategori "${cat}"?`, () => {
+                                  const updated = (data.categories || []).filter(
+                                    (c: string) => c !== cat
+                                  );
+
+                                  if (selectedCategory === cat) {
+                                    setSelectedCategory("Semua");
+                                  }
+
+                                  // Hapus secara optimistis dari UI sekaligus simpan ke Settings.
                                   setData((prev: typeof INITIAL_DATA) => ({
                                     ...prev,
-                                    categories: (prev.categories || []).filter((c: string) => c !== cat)
+                                    categories: updated,
+                                    settings: {
+                                      ...prev.settings,
+                                      themeCategories: JSON.stringify(updated)
+                                    }
                                   }));
-                                  triggerToast(`Kategori "${cat}" telah dihapus.`);
+
+                                  triggerToast(`Kategori "${cat}" dihapus. Menyimpan...`);
+
+                                  void callApi('updateSettings', {
+                                    data: {
+                                      themeCategories: JSON.stringify(updated)
+                                    }
+                                  })
+                                    .then(() => {
+                                      triggerToast(`Kategori "${cat}" berhasil dihapus permanen.`);
+                                    })
+                                    .catch((error: any) => {
+                                      void refreshAllData(false);
+                                      triggerToast(
+                                        error.message || 'Gagal menyimpan penghapusan kategori.'
+                                      );
+                                    });
                                 });
                               }}
                               className="text-gray-400 hover:text-red-500 p-0.5 rounded"
